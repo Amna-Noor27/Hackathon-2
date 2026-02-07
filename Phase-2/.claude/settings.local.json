@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install -r requirements.txt)",
+      "Bash(python test_connection_simple.py)",
+      "Bash(findstr /s /i \"@/hooks/useAuth\" D:Hackathon-IIPhase-2frontend*.ts* D:Hackathon-IIPhase-2frontend*.js*)",
+      "Bash(./venv/Scripts/python.exe test_updated_better_auth_integration.py)",
+      "Bash(python -m uvicorn src.main:app --reload --port 8000)",
+      "Bash(./venv/Scripts/python -m pip list)",
+      "Bash(./venv/Scripts/python -m pip install uvicorn)",
+      "Bash(./venv/Scripts/python -m uvicorn src.main:app --reload --port 8000)",
+      "Bash(./venv/Scripts/python -m uvicorn src.main:app --reload --port 8000 --log-level info)",
+      "Bash(./venv/Scripts/activate)",
+      "Bash(python -c \"\nimport sys\nsys.path.insert\\(0, ''src''\\)\nfrom main import app\nprint\\(''App loaded successfully''\\)\n\")",
+      "Bash(./venv/Scripts/activate.bat)",
+      "Bash(python -c \"import fastapi; print\\(''FastAPI available''\\)\")",
+      "Bash(./venv/Scripts/pip install -r requirements.txt)",
+      "Bash(./venv/Scripts/pip install \"pydantic>=2.5.0\")",
+      "Bash(./venv/Scripts/pip install \"fastapi>=0.104.1\")",
+      "Bash(./venv/Scripts/pip install \"sqlmodel>=0.0.16\" \"uvicorn>=0.24.0\" \"python-jose[cryptography]>=3.3.0\" \"passlib[bcrypt]>=1.7.4\" \"python-multipart>=0.0.6\" \"pydantic-settings>=2.1.0\")",
+      "Bash(timeout 10s ./venv/Scripts/python -c \"\nimport sys\nsys.path.insert\\(0, ''src''\\)\ntry:\n    from src.main import app\n    print\\(''SUCCESS: App loaded without import errors''\\)\nexcept Exception as e:\n    print\\(f''ERROR: {e}''\\)\n    import traceback\n    traceback.print_exc\\(\\)\n\")",
+      "Bash(timeout 30s ./venv/Scripts/python -m uvicorn src.main:app --port 8000 --host 0.0.0.0)",
+      "Bash(python -c \"\nfrom src.api.auth import router\nendpoints = []\nfor route in router.routes:\n    if hasattr\\(route, ''path''\\):\n        endpoints.append\\(\\(route.path, route.methods\\)\\)\nprint\\(''Available auth endpoints:''\\)\nfor path, methods in endpoints:\n    print\\(f''  {methods} {path}''\\)\n\")",
+      "Bash(\"D:\\\\Hackathon-II\\\\Phase-2\\\\backend\\\\venv\\\\Scripts\\\\activate.bat\")",
+      "Bash(pip install fastapi sqlmodel python-jose[cryptography] passlib[bcrypt] python-multipart uvicorn psycopg2-binary alembic pydantic-settings python-dotenv)",
+      "Bash(python -m py_compile \"D:\\\\Hackathon-II\\\\Phase-2\\\\backend\\\\src\\\\api\\\\auth.py\")",
+      "Bash(python \"D:\\\\Hackathon-II\\\\Phase-2\\\\backend\\\\test_endpoints_verification.py\")",
+      "Bash(python -m pip install passlib[bcrypt] python-jose[cryptography])",
+      "Bash(pip install bcrypt==4.0.1)",
+      "Bash(date /t)",
+      "Bash(del \"D:\\\\Hackathon-II\\\\Phase-2\\\\frontend\\\\components\\\\ProtectedRoute.tsx\")"
+    ]
+  }
+}

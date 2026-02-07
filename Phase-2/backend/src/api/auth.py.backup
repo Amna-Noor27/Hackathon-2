@@ -1,0 +1,352 @@
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.security import OAuth2PasswordRequestForm
+from sqlmodel import Session, select
+from src.database import get_session
+from src.auth.jwt import create_access_token, get_password_hash, verify_password
+from src.models.user import User, UserCreate, UserRead
+from src.auth.jwt_middleware import get_current_user_identity
+from typing import Dict, Any, Optional
+import json
+from datetime import datetime, timedelta
+from src.core.config import settings
+
+router = APIRouter()
+
+@router.post("/register")
+def register(user_data: UserCreate, session: Session = Depends(get_session)):
+    existing_user = session.exec(select(User).where(User.email == user_data.email)).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    new_user = User(
+        email=user_data.email,
+        name=user_data.name,
+        email_verified=None,  # Not verified during registration
+        image=user_data.image,  # Accept image if provided
+        hashed_password=get_password_hash(user_data.password)
+    )
+    session.add(new_user)
+    session.commit()
+    session.refresh(new_user)
+    return {"message": "User created successfully"}
+
+
+@router.post("/sign-up/email-password")
+async def sign_up_email_password(
+    request: Request,
+    session: Session = Depends(get_session)
+):
+    """
+    Better Auth compatible sign-up endpoint for email/password registration.
+    Expects email, password, and optional name in the request body.
+    """
+    try:
+        # Parse the request body to get email, password, and name
+        body = await request.json()
+        email = body.get("email")
+        password = body.get("password")
+        name = body.get("name", "")
+
+        if not email or not password:
+            raise HTTPException(
+                status_code=400,
+                detail="Email and password are required"
+            )
+
+        # Check if user already exists
+        existing_user = session.exec(select(User).where(User.email == email)).first()
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Email already registered")
+
+        # Create new user
+        new_user = User(
+            email=email,
+            name=name,
+            email_verified=None,  # Not verified during registration
+            image=None,  # No image for basic registration
+            hashed_password=get_password_hash(password)
+        )
+        session.add(new_user)
+        session.commit()
+        session.refresh(new_user)
+
+        # Create access token for the new user
+        access_token = create_access_token(data={"sub": str(new_user.id), "email": new_user.email})
+
+        # Return session data in Better Auth format
+        session_data = {
+            "user": {
+                "id": new_user.id,
+                "email": new_user.email,
+                "name": new_user.name or "",
+                "emailVerified": new_user.email_verified.isoformat() if new_user.email_verified else None,
+                "image": new_user.image,
+                "createdAt": new_user.created_at.isoformat() if new_user.created_at else None,
+                "updatedAt": new_user.updated_at.isoformat() if new_user.updated_at else None,
+            },
+            "accessToken": access_token,
+            "accessTokenExpiresAt": None,
+            "refreshToken": None
+        }
+
+        return session_data
+
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid request format: {str(e)}"
+        )
+
+@router.post("/login")
+def login(form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)):
+    user = session.exec(select(User).where(User.email == form_data.username)).first()
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+
+    access_token = create_access_token(data={"sub": str(user.id)})
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+@router.post("/sign-in/credentials")
+async def sign_in_credentials(
+    request: Request,
+    session: Session = Depends(get_session)
+):
+    """
+    Better Auth compatible sign-in endpoint that handles credentials.
+    Expects email and password in the request body.
+    """
+    try:
+        # Parse the request body to get email and password
+        body = await request.json()
+        email = body.get("email")
+        password = body.get("password")
+
+        if not email or not password:
+            raise HTTPException(
+                status_code=400,
+                detail="Email and password are required"
+            )
+
+        # Find user by email
+        user = session.exec(select(User).where(User.email == email)).first()
+        if not user or not verify_password(password, user.hashed_password):
+            raise HTTPException(status_code=401, detail="Incorrect email or password")
+
+        # Create access token
+        access_token = create_access_token(data={"sub": str(user.id), "email": user.email})
+
+        # Return session data in Better Auth format
+        session_data = {
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name or "",
+                "emailVerified": user.email_verified.isoformat() if user.email_verified else None,
+                "image": user.image,
+                "createdAt": user.created_at.isoformat() if user.created_at else None,
+                "updatedAt": user.updated_at.isoformat() if user.updated_at else None,
+            },
+            "accessToken": access_token,
+            "accessTokenExpiresAt": None,  # Could calculate this based on token expiration
+            "refreshToken": None  # We don't implement refresh tokens in this basic version
+        }
+
+        return session_data
+
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid request format: {str(e)}"
+        )
+
+@router.get("/get-session")
+async def get_session(request: Request, user_identity: Dict[str, Any] = Depends(get_current_user_identity)) -> Dict[str, Any]:
+    """
+    Get the current session information, compatible with Better Auth format.
+    This endpoint verifies the JWT token and returns user session data.
+    """
+    # Retrieve user from database to get complete information
+    from src.database import engine
+    with Session(engine) as db_session:
+        user = db_session.exec(select(User).where(User.id == user_identity.get("user_id"))).first()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Try to get the access token from various sources
+        access_token = ""
+
+        # First, try to get from Authorization header
+        if "authorization" in request.headers:
+            auth_header = request.headers.get("authorization", "")
+            if auth_header.startswith("Bearer "):
+                access_token = auth_header.replace("Bearer ", "")
+        elif "Authorization" in request.headers:
+            auth_header = request.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                access_token = auth_header.replace("Bearer ", "")
+
+        # If not found in headers, try to get from cookies (Better Auth may store token in cookies)
+        if not access_token and "better-auth-session" in request.cookies:
+            access_token = request.cookies.get("better-auth-session")
+        elif not access_token and "token" in request.cookies:
+            access_token = request.cookies.get("token")
+
+        # Format response to match Better Auth session format
+        session_data = {
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name or "",
+                "emailVerified": user.email_verified.isoformat() if user.email_verified else None,
+                "image": user.image,
+                "createdAt": user.created_at.isoformat() if user.created_at else None,
+                "updatedAt": user.updated_at.isoformat() if user.updated_at else None,
+            },
+            "session": {
+                "id": f"sess_{user.id}",  # Generate a session ID
+                "userId": user.id,
+                "expiresAt": (datetime.utcnow() + timedelta(minutes=settings.jwt_access_token_expire_minutes)).isoformat() if hasattr(settings, 'jwt_access_token_expire_minutes') else None,
+                "createdAt": datetime.utcnow().isoformat(),
+                "updatedAt": datetime.utcnow().isoformat(),
+            },
+            "accessToken": access_token,
+            "accessTokenExpiresAt": (datetime.utcnow() + timedelta(minutes=settings.jwt_access_token_expire_minutes)).isoformat() if hasattr(settings, 'jwt_access_token_expire_minutes') else None,
+            "refreshToken": None  # We don't implement refresh tokens in this basic version
+        }
+
+        return session_data
+
+@router.post("/logout")
+async def logout():
+    """
+    Logout endpoint that clears the session (for Better Auth compatibility).
+    """
+    return {"success": True}
+
+# Additional Better Auth compatible endpoints
+@router.get("/user")
+async def get_user(user_identity: Dict[str, Any] = Depends(get_current_user_identity)) -> Dict[str, Any]:
+    """
+    Get current user information, compatible with Better Auth format.
+    """
+    # Retrieve user from database to get complete information
+    from src.database import engine
+    with Session(engine) as db_session:
+        user = db_session.exec(select(User).where(User.id == user_identity.get("user_id"))).first()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        user_data = {
+            "id": user.id,
+            "email": user.email,
+            "name": user.name or "",
+            "emailVerified": user.email_verified.isoformat() if user.email_verified else None,
+            "image": user.image,
+            "createdAt": user.created_at.isoformat() if user.created_at else None,
+            "updatedAt": user.updated_at.isoformat() if user.updated_at else None,
+        }
+
+        return user_data
+
+# Endpoint to update user information (for email verification, profile picture, etc.)
+@router.put("/user")
+async def update_user(
+    user_update_data: UserCreate,
+    user_identity: Dict[str, Any] = Depends(get_current_user_identity),
+    session: Session = Depends(get_session)
+) -> Dict[str, Any]:
+    """
+    Update user information, compatible with Better Auth format.
+    """
+    user = session.exec(select(User).where(User.id == user_identity.get("user_id"))).first()
+
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Update allowed fields
+    if user_update_data.name is not None:
+        user.name = user_update_data.name
+    if user_update_data.image is not None:
+        user.image = user_update_data.image
+
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+
+    return {
+        "id": user.id,
+        "email": user.email,
+        "name": user.name or "",
+        "emailVerified": user.email_verified.isoformat() if user.email_verified else None,
+        "image": user.image,
+        "createdAt": user.created_at.isoformat() if user.created_at else None,
+        "updatedAt": user.updated_at.isoformat() if user.updated_at else None,
+    }
+
+
+@router.post("/get-session")
+async def post_get_session(request: Request, user_identity: Dict[str, Any] = Depends(get_current_user_identity)) -> Dict[str, Any]:
+    """
+    POST endpoint for getting session - additional endpoint for Better Auth compatibility.
+    Some implementations might call POST /get-session instead of GET.
+    """
+    # Retrieve user from database to get complete information
+    from src.database import engine
+    with Session(engine) as db_session:
+        user = db_session.exec(select(User).where(User.id == user_identity.get("user_id"))).first()
+
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Try to get the access token from various sources
+        access_token = ""
+
+        # First, try to get from Authorization header
+        if "authorization" in request.headers:
+            auth_header = request.headers.get("authorization", "")
+            if auth_header.startswith("Bearer "):
+                access_token = auth_header.replace("Bearer ", "")
+        elif "Authorization" in request.headers:
+            auth_header = request.headers.get("Authorization", "")
+            if auth_header.startswith("Bearer "):
+                access_token = auth_header.replace("Bearer ", "")
+
+        # If not found in headers, try to get from cookies (Better Auth may store token in cookies)
+        if not access_token and "better-auth-session" in request.cookies:
+            access_token = request.cookies.get("better-auth-session")
+        elif not access_token and "token" in request.cookies:
+            access_token = request.cookies.get("token")
+
+        # Format response to match Better Auth session format
+        session_data = {
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name or "",
+                "emailVerified": user.email_verified.isoformat() if user.email_verified else None,
+                "image": user.image,
+                "createdAt": user.created_at.isoformat() if user.created_at else None,
+                "updatedAt": user.updated_at.isoformat() if user.updated_at else None,
+            },
+            "session": {
+                "id": f"sess_{user.id}",  # Generate a session ID
+                "userId": user.id,
+                "expiresAt": (datetime.utcnow() + timedelta(minutes=settings.jwt_access_token_expire_minutes)).isoformat() if hasattr(settings, 'jwt_access_token_expire_minutes') else None,
+                "createdAt": datetime.utcnow().isoformat(),
+                "updatedAt": datetime.utcnow().isoformat(),
+            },
+            "accessToken": access_token,
+            "accessTokenExpiresAt": (datetime.utcnow() + timedelta(minutes=settings.jwt_access_token_expire_minutes)).isoformat() if hasattr(settings, 'jwt_access_token_expire_minutes') else None,
+            "refreshToken": None  # We don't implement refresh tokens in this basic version
+        }
+
+        return session_data
